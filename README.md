@@ -11,4 +11,5 @@ make -j
 ```
 
 ## Usage
-FIXME
+Usage: D64Writer <srcpath> <imagepath>
+Reads all '.prg' files found in a folder path to generate a .D64 image file.

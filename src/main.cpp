@@ -19,7 +19,7 @@ static constexpr size_t MAX_PROG_FILE_LEN = 65535;
 void usage(char const *argv0)
 {
     cerr << "Usage: " << argv0 << " <srcpath> <imagepath>" << endl;
-    cerr << "Reads a file or a folder path to generate a .D64 image" << endl;
+    cerr << "Reads all '.prg' files found in a folder path to generate a .D64 image file." << endl;
 }
 
 // returns a value > 0 if a .PRG file was read into the buffer
