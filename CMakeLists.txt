@@ -25,6 +25,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(D64Writer
     src/main.cpp
     src/Writer.cpp
+    src/TrackSector.cpp
     )    
 
 #
@@ -32,6 +33,9 @@ add_executable(D64Writer
 #
 add_executable(D64WriterTest 
     test/WriterTest.cpp
+    test/WriterTestHelper.cpp
+    src/Writer.cpp
+    src/TrackSector.cpp
     )
 
 target_include_directories(D64WriterTest PRIVATE 

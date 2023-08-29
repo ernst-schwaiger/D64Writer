@@ -4,28 +4,34 @@
 #include <array>
 #include <vector>
 #include <string>
+#include <ostream>
 
+#include "TrackSector.h"
 
 namespace d64
 {
 
-struct TrackSector_tag
-{
-    uint8_t track; // zero-based track index
-    uint8_t sector; // zero-based sector index within track
+// class TrackSector
+// {
+// public:
+//     uint8_t track; // zero-based track index
+//     uint8_t sector; // zero-based sector index within track
 
-    bool operator == (TrackSector_tag const &rhs) const
-    {
-        return ((track == rhs.track) && (sector == rhs.sector));
-    }
+//     bool operator == (TrackSector const &rhs) const
+//     {
+//         return ((track == rhs.track) && (sector == rhs.sector));
+//     }
 
-    bool operator != (TrackSector_tag const &rhs) const
-    {
-        return !(*this == rhs); 
-    }
-};
+//     bool operator != (TrackSector const &rhs) const
+//     {
+//         return !(*this == rhs); 
+//     }
 
-typedef struct TrackSector_tag TrackSector;
+//     static uint16_t getSectorIdx(TrackSector ts);
+//     static TrackSector getTrackAndSector(uint16_t sectorIdx);
+//     static uint8_t getSectorsOnTrack(uint8_t track);
+//     static uint8_t getInterleaveOnTrack(uint8_t track);    
+// };
 
 class Writer
 {
@@ -46,16 +52,17 @@ public:
 
     static constexpr TrackSector TRACK_SECTOR_INVALID = {255, 255};
 
-    Writer()
+    Writer(std::string const folderName = "Demo")
     {
         diskBytes.fill(0x00);
-        initImage();
+        initImage(folderName);
     }
 
     bool writeFile(std::string const &name, uint8_t *pData, size_t length);
+    friend std::ostream & operator << (std::ostream &os, d64::Writer const &writer);
 
 private:
-    void initImage();
+    void initImage(std::string const &folderName);
 
     uint8_t *getSector(uint16_t idx) {  return &diskBytes[idx * BYTES_PER_SECTOR];}
     uint8_t const *getSector(uint16_t idx) const {  return &diskBytes[idx * BYTES_PER_SECTOR];}
@@ -65,17 +72,12 @@ private:
     uint8_t writeDataToSector(uint16_t sectorIdx, uint8_t *pData, size_t length, uint16_t prevSectorIdx);
     TrackSector writeData(uint8_t *pData, size_t length);
 
+    bool isTrackSectorAvailable(TrackSector ts) const;
     void setSectorOccupied(uint16_t sectorIdx);
 
-    TrackSector getTrackAndSector(uint16_t sectorIdx) const;
-    uint16_t getSectorIdx(TrackSector ts) const;
-    
-
     uint16_t getNumberOfFreeSectors() const;
-    uint16_t getNumberOfAvailableBytes() const { return getNumberOfFreeSectors() * DATA_BYTES_PER_SECTOR; }
+    size_t getNumberOfAvailableBytes() const { return getNumberOfFreeSectors() * DATA_BYTES_PER_SECTOR; }
     uint32_t getSectorBitsOfTrack(uint8_t trackIdx) const;
-    uint8_t getSectorsOnTrack(uint8_t track) const;
-    uint8_t getInterleaveOnTrack(uint8_t track) const;
 
     std::string makeD64FileName(std::string const &origFileName);
     void writeString(uint8_t *pDest, std::string const &in);
@@ -83,6 +85,8 @@ private:
 
     std::array<uint8_t, BYTES_PER_SECTOR * NUM_SECTORS> diskBytes;
 };
+
+std::ostream & operator << (std::ostream &os, d64::Writer const &writer);
 
 }
 

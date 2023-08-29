@@ -8,51 +8,39 @@
 using namespace d64;
 using namespace std;
 
-// copy/paste/change from
-// https://en.wikipedia.org/wiki/Hamming_weight
-static int popcount64c(uint64_t x)
-{
-    const uint64_t m1  = 0x5555555555555555; //binary: 0101...
-    const uint64_t m2  = 0x3333333333333333; //binary: 00110011..
-    const uint64_t m4  = 0x0f0f0f0f0f0f0f0f; //binary:  4 zeros,  4 ones ...
-    const uint64_t h01 = 0x0101010101010101; //the sum of 256 to the power of 0,1,2,3...
-
-    x -= (x >> 1) & m1;             //put count of each 2 bits into those 2 bits
-    x = (x & m2) + ((x >> 2) & m2); //put count of each 4 bits into those 4 bits 
-    x = (x + (x >> 4)) & m4;        //put count of each 8 bits into those 8 bits 
-    return (x * h01) >> 56;  //returns left 8 bits of x + (x<<8) + (x<<16) + (x<<24) + ... 
-}
-
-void Writer::initImage()
+void Writer::initImage(std::string const &folderName)
 {
     uint8_t *pBAM = getSector(BAM_SECTOR_IDX);
-    pBAM[0] = getTrackAndSector(BAM_SECTOR_IDX).track + 1;
+    pBAM[0] = TrackSector::getTrackAndSector(BAM_SECTOR_IDX).track + 1;
     pBAM[1] = 0x01; // is ignored, next sector is sector #3
     pBAM[2] = 0x41; // DOS version type
     pBAM[3] = 0x00; // unused
 
-
     // 0x04..0x8F BAM track entries cover which sector on which track is free/occupied
     for (uint8_t trackIdx = 0; trackIdx < NUM_TRACKS; trackIdx++)
     {
-        // 4 bytes per track, little endian, '1' marks free sector
-        // unavailable sectors marked as occupied  '0'
-        uint32_t occupiedBits = (1 << getSectorsOnTrack(trackIdx)) - 1;
-        pBAM[((trackIdx + 1) * 4)] = occupiedBits & 0xff;
-        pBAM[((trackIdx + 1) * 4) + 1] = (occupiedBits >> 8) & 0xff;
-        pBAM[((trackIdx + 1) * 4) + 2] = (occupiedBits >> 16) & 0xff;
-        pBAM[((trackIdx + 1) * 4) + 3] = (occupiedBits >> 24) & 0xff;
+        uint8_t *pTrackEntry = &pBAM[4 + trackIdx* 4];
+        // 4 bytes per track, first byte indicates the free sectors per track
+        uint8_t sectorsOnTrack = TrackSector::getSectorsOnTrack(trackIdx);
+        pTrackEntry[0] = sectorsOnTrack;
+        // Bytes 1..3 provide '1' flag for available, '0' for occupied sector
+        // indexing starts with first byte MSB first, i.e. MSB of first byte
+        // contains status of sector 0
+        uint32_t occupiedBits = (1 << sectorsOnTrack) - 1;
+        pTrackEntry[1] = static_cast<uint8_t>(occupiedBits & 0xff);
+        pTrackEntry[2] = static_cast<uint8_t>((occupiedBits >> 8) & 0xff);
+        pTrackEntry[3] = static_cast<uint8_t>((occupiedBits >> 16) & 0xff);
     }
     setSectorOccupied(BAM_SECTOR_IDX); // the sector in which we are just writing
 
-    writeStringWithPadding(&pBAM[0x90], "DISK", 16, 0xa0); // Disk Name
+    writeStringWithPadding(&pBAM[0x90], makeD64FileName(folderName), 16, 0xa0); // Disk Name
     pBAM[0xa0] = 0xa0;
     pBAM[0xa1] = 0xa0;
-    pBAM[0xa2] = 0x56;
-    pBAM[0xa3] = 0x54;
-    pBAM[0xa4] = 0xa0;
-    pBAM[0xa5] = 0x2a;
-    pBAM[0xa6] = 0x2a;
+    pBAM[0xa2] = 0x34; // Disk ID "42"
+    pBAM[0xa3] = 0x32; // Disk ID
+    pBAM[0xa4] = 0xa0;  
+    pBAM[0xa5] = 0x32; // DOS Type "2A"
+    pBAM[0xa6] = 0x41; 
     pBAM[0xa7] = 0xa0;
     pBAM[0xa8] = 0xa0;
     pBAM[0xa9] = 0xa0;
@@ -64,89 +52,20 @@ void Writer::initImage()
 void Writer::setSectorOccupied(uint16_t sectorIdx)
 {
     uint8_t *pBAM = getSector(BAM_SECTOR_IDX);
-    TrackSector ts = getTrackAndSector(sectorIdx);
-    uint8_t *pBAMEntryByte = &pBAM[0x04 + (ts.track * 4) + (ts.sector / 8)];
-
-    // clearing the bit of the sector marks it as occupied
-    *pBAMEntryByte &= (0xff - (1 << ts.sector % 8));
+    TrackSector ts = TrackSector::getTrackAndSector(sectorIdx);
+    uint8_t *pBAMEntryTrack = &pBAM[0x04 + (ts.track * 4)];
+    --pBAMEntryTrack[0]; // number of free sectors resuced by one (ours)
+    uint8_t *pBAMEntrySector = &pBAMEntryTrack[1 + ts.sector / 8];
+    uint8_t mask = (1 << (ts.sector % 8)) ^ 0xff;
+    *pBAMEntrySector &= mask;
 }
-
-// although in the documentation, tracks start with track number 1, we
-// still start with zero, to make calculations easier.
-TrackSector  Writer::getTrackAndSector(uint16_t sectorIdx) const
-{
-    // tracks 0..16: 21 sectors per track
-    if (sectorIdx < 357)
-    {
-        return TrackSector
-        {
-            static_cast<uint8_t>(sectorIdx / 21),
-            static_cast<uint8_t>(sectorIdx % 21)
-        };
-    }
-
-    // tracks 17..23: 19 sectors per track
-    if (sectorIdx < 490)
-    {
-        return TrackSector
-        {
-            static_cast<uint8_t>((sectorIdx - 357) / 19),
-            static_cast<uint8_t>((sectorIdx - 357) % 19)
-        };
-    }
-
-    // tracks 24..29: 18 sectors per track
-    if (sectorIdx < 598)
-    {
-        return TrackSector
-        {
-            static_cast<uint8_t>((sectorIdx - 490) / 18),
-            static_cast<uint8_t>((sectorIdx - 490) % 18)
-        };
-    }
-
-    // tracks 30..34: 17 sectors per track
-    return TrackSector
-    {
-        static_cast<uint8_t>((sectorIdx - 598) / 17),
-        static_cast<uint8_t>((sectorIdx - 598) % 17)
-    };
-}
-
-uint16_t Writer::getSectorIdx(TrackSector ts) const
-{
-    uint16_t ret = INVALID;
-
-    if (ts.track < 17)
-    {
-        return (ts.track * 21) + ts.sector;
-    }
-
-    if (ts.track < 24)
-    {
-        return (17 * 21) + ((ts.track - 17) * 19) + ts.sector;
-    }
-
-    if (ts.track < 30)
-    {
-        return (17 * 21) + (7 * 19) + ((ts.track - 24) * 18) + ts.sector;
-    }
-
-    return (17 * 21) + (7 * 19) + (6 * 18) + ((ts.track - 30) * 17) + ts.sector;
-}
-
 
 
 uint32_t Writer::getSectorBitsOfTrack(uint8_t trackIdx) const
 {
     uint8_t const *pBAM = getSector(BAM_SECTOR_IDX);
-    uint32_t sectorBits = 
-        pBAM[((trackIdx + 1) * 4)] +
-        pBAM[((trackIdx + 1) * 4) + 1] << 8 +
-        pBAM[((trackIdx + 1) * 4) + 2] << 16 +
-        pBAM[((trackIdx + 1) * 4) + 3] << 24;
-
-    return sectorBits;
+    uint8_t const *pTrackEntry = &pBAM[4 + trackIdx * 4];
+    return pTrackEntry[1] + (pTrackEntry[2] << 8) + (pTrackEntry[3] << 16);
 }
 
 uint16_t Writer::getNumberOfFreeSectors() const
@@ -159,48 +78,13 @@ uint16_t Writer::getNumberOfFreeSectors() const
         // directory track cannot be used for data
         if (trackIdx != DIRECTORY_TRACK)
         {
-            uint32_t sectorBits = getSectorBitsOfTrack(trackIdx);
-            ret = ret + static_cast<uint16_t>(popcount64c(sectorBits));
+            // first byte of a track entry holds the free sectors
+            ret = ret + pBAM[(trackIdx + 1) * 4];
         }
     }
 
     return ret;
 }
-
-// takes zero byte index of track
-uint8_t Writer::getSectorsOnTrack(uint8_t track) const
-{
-    if (track < 17) return 21;
-    if (track < 24) return 19;
-    if (track < 30) return 18;
-    return 17;
-}
-
-// a number relative prime to the number of sectors on the track,
-// so we can visit every sector
-uint8_t Writer::getInterleaveOnTrack(uint8_t track) const
-{
-    uint8_t ret = 0;
-    switch(getSectorsOnTrack(track))
-    {
-        case 21:
-        case 19:
-            ret = 10;
-            break;
-        case 18:
-            ret = 7;
-            break;
-        case 17:
-            ret = 9;
-            break;
-        default:
-            assert(0);
-    }
-
-    return ret;
-}
-
-
 
 std::string Writer::makeD64FileName(std::string const &origFileName)
 {
@@ -216,7 +100,7 @@ std::string Writer::makeD64FileName(std::string const &origFileName)
         else if (ch >= 'a'  && ch <= 'z')
         {
             // toUpper
-            strm << (ch - 'a') + 'A';
+            strm << static_cast<uint8_t>((ch - 'a') + 'A');
         }
         else
         {
@@ -247,30 +131,8 @@ void Writer::writeStringWithPadding(uint8_t *pDest, std::string const &in, size_
 
 TrackSector Writer::getFirstFreeTrackSector() const
 {
-    TrackSector ret = TRACK_SECTOR_INVALID;
-    uint8_t const *pBAM = getSector(BAM_SECTOR_IDX);
-
-    for (uint8_t trackIdx = 0; trackIdx < NUM_TRACKS; trackIdx++)
-    {
-        if (trackIdx != DIRECTORY_TRACK)
-        {
-            // found a track with at least one sector
-            uint32_t sectorBits = getSectorBitsOfTrack(trackIdx);
-            uint8_t sectorsOfTrack = getSectorsOnTrack(trackIdx);
-
-            // get the track idx, find the first set bit
-            uint8_t sectorIdx = 0;
-            while ((sectorIdx < sectorsOfTrack) && (!(sectorBits && (0x01 << sectorIdx))))
-            {
-                sectorIdx++;
-            }
-
-            ret = {trackIdx, sectorIdx};
-            break;
-        }
-    }
-
-    return ret;
+    TrackSector ret = {0,0};
+    return isTrackSectorAvailable(ret) ? ret : getNextFreeTrackSector(ret);
 }
 
 TrackSector Writer::getNextFreeTrackSector(TrackSector previous) const
@@ -281,16 +143,17 @@ TrackSector Writer::getNextFreeTrackSector(TrackSector previous) const
     {
         if (trackIdx != DIRECTORY_TRACK)
         {
-            uint8_t interleave = getInterleaveOnTrack(trackIdx);
-            uint8_t numSectors = getSectorsOnTrack(trackIdx);
+            uint8_t interleave = TrackSector::getInterleaveOnTrack(trackIdx);
+            uint8_t numSectors = TrackSector::getSectorsOnTrack(trackIdx);
             uint32_t sectorBits = getSectorBitsOfTrack(trackIdx);
 
             for (uint8_t i = 0; i < numSectors; i++)
             {
                 uint8_t sectorOnTrack = static_cast<uint8_t>((sectorStartIDx + (i * interleave)) % numSectors);
-                if (sectorBits & (0x01 << sectorOnTrack))
+                TrackSector nextTS = {trackIdx, sectorOnTrack};
+                if (isTrackSectorAvailable(nextTS))
                 {
-                    return {previous.track, previous.sector};
+                    return nextTS;
                 }
             }
         }
@@ -300,6 +163,12 @@ TrackSector Writer::getNextFreeTrackSector(TrackSector previous) const
     }
 
     return TRACK_SECTOR_INVALID;
+}
+
+bool Writer::isTrackSectorAvailable(TrackSector ts) const
+{
+    uint32_t sectorBits = getSectorBitsOfTrack(ts.track);
+    return (sectorBits & (1 << ts.sector));
 }
 
 
@@ -322,8 +191,8 @@ bool Writer::writeFile(string const &name, uint8_t *pData, size_t length)
     {
         if (dirIdx == 0)
         {
-            pDirEntry[0] = DIRECTORY_TRACK + 1; // 1 based
-            pDirEntry[1] = 4; // next sector, interleave is 3
+            pDirEntry[0] = 0x00; // invalid, there is no next entry
+            pDirEntry[1] = 0xff; // invalid, there is no next entry
         }
         else
         {
@@ -331,7 +200,7 @@ bool Writer::writeFile(string const &name, uint8_t *pData, size_t length)
             pDirEntry[1] = 0x00;
         }
 
-        pDirEntry[2] = 2; // .PRG
+        pDirEntry[2] = 0x82; // .PRG
         TrackSector ts = writeData(pData, length);
 
         if (ts != TRACK_SECTOR_INVALID)
@@ -340,11 +209,13 @@ bool Writer::writeFile(string const &name, uint8_t *pData, size_t length)
             pDirEntry[4] = ts.sector;
 
             string d64Name = makeD64FileName(name);
-            writeStringWithPadding(&pDirEntry[5], d64Name, d64Name.length(), 0xa0);
+            writeStringWithPadding(&pDirEntry[5], d64Name, 16, 0xa0);
             // 9 bytes unused for .PRG leave at 0x00 as is
-            // file length in bytes, little endian
-            pDirEntry[30] = static_cast<uint8_t>(length & 0xff);
-            pDirEntry[31] = static_cast<uint8_t>((length >> 8) & 0xff);
+            // file length in sectors, aka "blocks", little endian
+            uint16_t numberOfBlocks = (length + (DATA_BYTES_PER_SECTOR - 1)) / DATA_BYTES_PER_SECTOR;
+
+            pDirEntry[30] = static_cast<uint8_t>(numberOfBlocks & 0xff);
+            pDirEntry[31] = static_cast<uint8_t>((numberOfBlocks >> 8) & 0xff);
 
             success = true;
         }
@@ -352,7 +223,17 @@ bool Writer::writeFile(string const &name, uint8_t *pData, size_t length)
 
 
     return success;
+}
 
+
+std::ostream & d64::operator << (std::ostream &os, d64::Writer const &writer)
+{
+    for (auto ch : writer.diskBytes)
+    {
+        os << ch;
+    }
+
+    return os;
 }
 
 
@@ -360,21 +241,24 @@ TrackSector Writer::writeData(uint8_t *pData, size_t length)
 {
     TrackSector ret = TRACK_SECTOR_INVALID;
 
-    if (length < getNumberOfAvailableBytes() && length > 0)
-    {
-        TrackSector ret = getFirstFreeTrackSector();
+    size_t availableBytes = getNumberOfAvailableBytes();
 
-        uint16_t sectorIdx = getSectorIdx(ret);
+    if (length <= availableBytes && length > 0)
+    {
+        ret = getFirstFreeTrackSector();
+
+        uint16_t sectorIdx = TrackSector::getSectorIdx(ret);
         uint16_t previousSectorIdx = INVALID;
 
         while (length && (sectorIdx != INVALID))
         {
-            length -= writeDataToSector(sectorIdx, pData, length, previousSectorIdx);
-
+            uint8_t writtenData = writeDataToSector(sectorIdx, pData, length, previousSectorIdx);
+            length -= writtenData;
+            pData=&pData[writtenData];
 
             previousSectorIdx = sectorIdx;
             // Check is there a way to get this faster?
-            sectorIdx = getSectorIdx(getNextFreeTrackSector(getTrackAndSector(sectorIdx)));
+            sectorIdx = TrackSector::getSectorIdx(getNextFreeTrackSector(TrackSector::getTrackAndSector(sectorIdx)));
         }
     }
 
@@ -385,21 +269,28 @@ TrackSector Writer::writeData(uint8_t *pData, size_t length)
 uint8_t Writer::writeDataToSector(uint16_t sectorIdx, uint8_t *pData, size_t length, uint16_t prevSectorIdx)
 {
     uint8_t *pSector = getSector(sectorIdx);
-    uint8_t ret = std::min(length, static_cast<size_t>(254));
+    uint8_t ret = std::min(length, static_cast<size_t>(DATA_BYTES_PER_SECTOR));
 
     // link to previous sector
     if (prevSectorIdx != INVALID)
     {
         uint8_t *pPrevSector = getSector(prevSectorIdx);
-        TrackSector tsCurrent = getTrackAndSector(sectorIdx);
+        TrackSector tsCurrent = TrackSector::getTrackAndSector(sectorIdx);
         pPrevSector[0] = tsCurrent.track + 1; // on the disk system, tracks start with "1"
         pPrevSector[1] = tsCurrent.sector; // but sectors are still zero-based
     }
 
     // copy data
-    std::copy(&pSector[2], &pSector[2 + ret], pData);
+    std::copy(&pData[0], &pData[ret], &pSector[2]);
     // mark as occupied, prevents overwriting
     setSectorOccupied(sectorIdx);
+
+    if (ret <= DATA_BYTES_PER_SECTOR)
+    {
+        // this is the last sector of our file. conclude with track := 0, sector := <used bytes>
+        pSector[0] = 0x00;
+        pSector[1] = ret;
+    }
 
     return ret;
 }
